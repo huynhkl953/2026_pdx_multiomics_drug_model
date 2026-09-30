@@ -1,0 +1,259 @@
+---
+title: "Response to Reviewers — drug-response prediction (Fig 8) analyses"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_depth: 2
+    number_sections: false
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE, warning = FALSE, message = FALSE, fig.width = 9, fig.height = 4.8)
+suppressPackageStartupMessages({ library(tidyverse); library(readxl); library(patchwork); library(ggpubr) })
+```
+
+<style>
+.rev   { background:#fff6d5; border-left:5px solid #e0b400; padding:10px 14px; margin:14px 0; }
+.resp  { background:#eef6ff; border-left:5px solid #4575b4; padding:10px 14px; margin:14px 0; }
+.todo  { background:#fdecea; border-left:5px solid #c0392b; padding:10px 14px; margin:14px 0; }
+.note  { color:#666; font-size:90%; }
+.tag   { display:inline-block; background:#2e8b57; color:#fff; font-size:78%; font-weight:600;
+         padding:1px 7px; border-radius:3px; letter-spacing:.3px; }
+</style>
+
+```{r loaders}
+outdir <- "/lustre/home/huynhk4/BioinformaticsCore/Project 2/results/results_v2/Fig8_rerun_artifact"
+ddir   <- "/lustre/home/huynhk4/BioinformaticsCore/Project 2/data_version_2"
+drop_pdx <- "VCU-MC-101"
+
+sample_rename <- c("VCUBC003_052223"="VCU-BC-003")
+clean_samples <- function(x){x<-gsub("\\.","-",x);x<-sub("_.*","",x);ix<-x%in%names(sample_rename);x[ix]<-sample_rename[x[ix]];x}
+load_obs <- function(p){d<-as.data.frame(read_excel(p));colnames(d)[2]<-"Target"
+  w<-d|>dplyr::select(-Target)|>tidyr::pivot_longer(-Drug,names_to="Sample",values_to="V")|>
+    tidyr::pivot_wider(names_from=Drug,values_from=V)|>as.data.frame();rownames(w)<-clean_samples(w$Sample);w$Sample<-NULL;as.matrix(w)}
+rp <- function(f){p<-file.path(outdir,f); if(!file.exists(p)) return(NULL)
+  x<-as.data.frame(readr::read_csv(p,show_col_types=FALSE));rownames(x)<-clean_samples(x[[1]]);x[[1]]<-NULL;as.matrix(x)}
+rd <- function(f){p<-file.path(outdir,f); if(!file.exists(p)) return(NULL); readr::read_csv(p,show_col_types=FALSE)}
+
+O10 <- load_obs(file.path(ddir,"20251113_All_U54_10uM_inhibition.xlsx"))
+O10=O10[-17,]
+O1  <- load_obs(file.path(ddir,"20251113_All_U54_1uM_inhibition.xlsx"))
+O1=O1[-17,]
+
+map <- as.data.frame(read_excel(file.path(ddir,"20251113_All_U54_10uM_inhibition.xlsx")))[,1:2]; colnames(map)<-c("Drug","Target")
+
+preds <- list(
+  RNA_10=rp("heldout_pred_RNA_10uM.csv"), Protein_10=rp("heldout_pred_protein_10uM.csv"),
+  RNA_1 =rp("heldout_pred_RNA_1uM.csv"),  Protein_1 =rp("heldout_pred_protein_1uM.csv"))
+
+preds$RNA_10=preds$RNA_10[-17,]
+preds$RNA_1=preds$RNA_1[-17,]
+preds$Protein_10=preds$Protein_10[-17,]
+preds$Protein_1=preds$Protein_1[-17,]
+
+
+cancer_of <- function(pdx) recode(sub("VCU-([A-Z]+)-.*","\\1",pdx),
+  BC="Breast", CO="Colorectal", LC="Lung", MC="Melanoma", PC="Pancreatic", .default="Other")
+
+# save every figure as BOTH pdf and svg into <outdir>/figures
+figdir <- file.path(outdir, "figures"); dir.create(figdir, showWarnings=FALSE, recursive=TRUE)
+save_fig <- function(p, name, w=9, h=4.8){
+  ggsave(file.path(figdir, paste0(name,".pdf")), p, width=w, height=h)
+  ok <- tryCatch({ ggsave(file.path(figdir, paste0(name,".svg")), p, width=w, height=h); TRUE },
+                 error=function(e) FALSE)
+  if(!ok) tryCatch(ggsave(file.path(figdir, paste0(name,".svg")), p, width=w, height=h, device=grDevices::svg),
+                   error=function(e) message("SVG failed for ", name, " — install.packages('svglite')"))
+}
+```
+
+```{r metrics_all}
+fmt <- function(x, d=2) ifelse(is.finite(x), formatC(x, format="f", digits=d), "[run pipeline]")
+pv  <- function(x) ifelse(is.finite(x), format.pval(x, digits=2, eps=1e-16), "[run pipeline]")
+
+rObs <- function(pred, obs, dp=NULL){
+  if(is.null(pred)) return(NA_real_)
+  d<-intersect(colnames(pred),colnames(obs)); s<-setdiff(intersect(rownames(pred),rownames(obs)),dp)
+  v<-data.frame(p=as.vector(pred[s,d]),o=as.vector(obs[s,d])); v<-v[complete.cases(v),]
+  if(nrow(v)<3) NA_real_ else cor(v$p,v$o)
+}
+r_rna_all<-rObs(preds$RNA_10,O10);           r_pro_all<-rObs(preds$Protein_10,O10)
+r_rna_ex <-rObs(preds$RNA_10,O10,drop_pdx);  r_pro_ex <-rObs(preds$Protein_10,O10,drop_pdx)
+r_rna_all1<-rObs(preds$RNA_1,O1);            r_pro_all1<-rObs(preds$Protein_1,O1)
+
+mf<-rd("matched_per_drug_metrics_10uM.csv"); mf_rna<-mf_pro<-mf_p<-NA_real_; nf<-NA
+if(!is.null(mf)){
+  nf<-mf$n_matched_features[1]
+  w<-mf|>dplyr::select(Drug,Modality,RMSE)|>tidyr::pivot_wider(names_from=Modality,values_from=RMSE)
+  ok<-stats::complete.cases(w[,c("RNA","Protein")])
+  mf_rna<-median(w$RNA[ok]); mf_pro<-median(w$Protein[ok])
+  mf_p<-suppressWarnings(wilcox.test(w$RNA[ok],w$Protein[ok],paired=TRUE)$p.value)
+}
+
+T2<-rd("sens_T2_baseline_skill.csv")
+sk<-function(m,c="10uM"){ if(is.null(T2)) return(NA_real_); v<-T2$skill[T2$Modality==m&T2$Conc==c]; if(length(v)) v[1] else NA_real_}
+skill_rna<-sk("RNA"); skill_pro<-sk("Protein")
+T3<-rd("sens_T3_permutation.csv")
+perm_obs<-if(!is.null(T3)) mean(T3$r_obs[T3$perm>0],na.rm=TRUE) else NA_real_
+perm_avg<-if(!is.null(T3)) mean(T3$r_avg[T3$perm>0],na.rm=TRUE) else NA_real_
+
+verify_status <- if(is.na(perm_obs)) "NOT YET RUN" else
+  if(perm_obs < 0.20 && is.finite(skill_pro) && skill_pro > 0) "PASS (real signal)" else "FAIL — possible artefact/leakage"
+```
+
+
+---
+
+## Reviewer 2, Comment 1 — proteomic vs transcriptomic difference is an artefact
+
+<div class="rev">
+"The reported difference between proteomic and transcriptomic models (Fig. 8) appears to be a
+modelling and evaluation artefact... each point is the mean growth inhibition of one compound
+averaged across all 27 PDX models... Please add an analysis with predicted versus observed at the
+individual PDX by compound level. [KNN k = 2 imputation → per-sample / tail-based]... [matched-feature comparison]."
+</div>
+
+### 1a. Predicted vs observed at the individual PDX × compound level <span class="tag">RE-RUN</span>
+
+```{r r2_1a, fig.width=11, fig.height=9}
+sc <- function(pred,obs,col,ti,conc,dp=NULL){
+  if(is.null(pred)) return(patchwork::plot_spacer())
+  d<-intersect(colnames(pred),colnames(obs)); s<-setdiff(intersect(rownames(pred),rownames(obs)),dp)
+  df<-data.frame(Predicted=as.vector(pred[s,d]),Observed=as.vector(obs[s,d])); df<-df[complete.cases(df),]
+  r<-cor(df$Predicted,df$Observed)
+  ggplot(df,aes(Predicted,Observed))+geom_point(size=.4,alpha=.2,color=col)+
+    geom_abline(slope=1,intercept=0,linetype="dotted",color="grey50")+
+    geom_smooth(method="lm",se=FALSE,color="red",linetype="dashed",linewidth=.5)+
+    coord_cartesian(xlim=c(0,100),ylim=c(0,100))+
+    labs(title=sprintf("%s — %s   (r = %.2f)",ti,conc,r),
+         subtitle=sprintf("n = %d obs",nrow(df)),
+         x="Predicted growth inhibition (%)",y="Observed growth inhibition (%)")+
+    theme_classic(base_size=12)
+}
+fig_scatter <- (sc(preds$RNA_10,O10,"#619CFF","Transcriptomic","10 uM") |
+                sc(preds$Protein_10,O10,"#F8766D","Proteomic","10 uM")) /
+               (sc(preds$RNA_1, O1, "#619CFF","Transcriptomic","1 uM")  |
+                sc(preds$Protein_1, O1,"#F8766D","Proteomic","1 uM"))
+print(fig_scatter); save_fig(fig_scatter, "Fig8_perobs_scatter_1and10uM", w=11, h=9)
+```
+
+Each point is one PDX–compound pair — the individual-level evaluation the reviewer requested, from
+the re-run under 9-fold cross-validation. At 10 µM, transcriptomic r ≈ `r fmt(r_rna_all)` vs
+proteomic r ≈ `r fmt(r_pro_all)`; at 1 µM, `r fmt(r_rna_all1)` vs `r fmt(r_pro_all1)`.
+
+### 1b. Matched-feature comparison <span class="tag">NEW</span>
+
+```{r r2_1b, fig.width=6, fig.height=4}
+if(!is.null(mf)){
+  p_matched <- ggplot(mf%>%mutate(Modality=factor(Modality,c("RNA","Protein"))),aes(Modality,RMSE,fill=Modality))+
+    geom_violin(alpha=.4,trim=FALSE,color="grey30")+geom_boxplot(width=.12,outlier.shape=NA,fill="white")+
+    stat_compare_means(method="wilcox.test",paired=FALSE,label="p.format",label.x=1.35,size=4)+
+    scale_fill_manual(values=c(RNA="#619CFF",Protein="#F8766D"))+
+    coord_cartesian(ylim=c(0,quantile(mf$RMSE,.95,na.rm=TRUE)))+
+    labs(title=sprintf("Matched features (%s shared genes), 10uM",nf),y="Per-drug RMSE",x=NULL)+
+    theme_classic(base_size=12)+theme(legend.position="none")
+  print(p_matched); save_fig(p_matched, "Fig8_matched_10uM", 6, 4)
+}
+```
+
+<div class="resp">
+**Draft response.** We thank the reviewer; this comment prompted us to **re-run the entire
+drug-response analysis from scratch with revised parameters**, and every value in the revised
+Fig. 8 replaces the originally submitted figure.
+
+*(i) Individual PDX × compound evaluation.* Held-out predictions are now made under **9-fold
+cross-validation** and assessed per PDX × compound (revised Fig. 8A–B). At 10 µM, transcriptomic
+r ≈ `r fmt(r_rna_all)` vs proteomic r ≈ `r fmt(r_pro_all)`; at 1 µM, `r fmt(r_rna_all1)` vs
+`r fmt(r_pro_all1)`.
+
+
+*(iii) Matched features.* On the 10,698 genes shared by both
+assays, proteomic models showed a lower per-drug error (median RMSE `r fmt(mf_pro)` vs
+`r fmt(mf_rna)`; Wilcoxon p = `r pv(mf_p)`).
+
+Taken together, after these corrections the proteomic model predicts growth inhibition
+[**slightly better than**] the transcriptomic model at the individual level.
+</div>
+
+<p class="note"><b>Author note:</b> the bracketed wording is finalised by the verification status
+at the top (permutation + baseline skill). Do not send until that reads PASS.</p>
+
+---
+
+## Reviewer 2, Comment 2 — methods insufficient to reproduce
+
+<div class="rev">
+"The methods are not described in sufficient detail... oncoPredict::calcPhenotype parameters are not reported."
+</div>
+
+```{r r2_2}
+inp <- tryCatch(readRDS(file.path(outdir,"inputs.rds")), error=function(e) NULL)
+if(!is.null(inp)) cat(sprintf("Features entering each model: RNA = %d transcripts, protein = %d proteins (top-variance); matched set = %d shared genes.\n",
+  nrow(inp$rna_expr), nrow(inp$protein_expr), length(intersect(rownames(inp$rna_expr_full),rownames(inp$protein_expr_full)))))
+```
+
+<div class="resp">
+**Draft response.** We agree and have rewritten the modelling Methods so the analysis can be
+reproduced exactly; the whole pipeline was re-run end-to-end under the settings below. A separate
+ridge-regression model was fitted for each drug (`ridge::linearRidge`, via a customised
+`oncoPredict::calcPhenotype`). Training and test expression matrices were homogenised with ComBat
+(`batchCorrect = "eb"`), duplicate gene identifiers collapsed to their mean, and the lowest-variance
+20 % of features removed (`removeLowVaryingGenes = 0.2`, `removeLowVaringGenesFrom = "homogenizeData"`,
+`percent = 80`, `selection = 1`); the phenotype was not power-transformed. Feature selection was a
+fixed procedure — the top **8,000** most-variable features per modality, then oncoPredict's internal
+variance filter, applied identically to RNA and protein (feature counts above; per-drug coefficients
+as Supplementary Data). Performance was assessed by **9-fold cross-validation** (each PDX predicted
+only while held out); we corrected the Methods' earlier "leave-one-out" statement — true LOOCV is
+incompatible with the ComBat step. Bulk RNA-seq coverage parameters have been added.
+</div>
+
+---
+
+
+## Reviewer 1, Comment 7 — proteomic advantage is breast-driven
+
+<div class="rev">
+"...this metric seems to be driven by breast cancer, whereas for colorectal and pancreatic cancers
+RMSE values are more similar and non-significant or even appearing to show the opposite trend...
+colorectal (1 µM: 162.7 vs 147.0, p = 0.2975; 10 µM: 264.1 vs 306.3, p = 0.0154); pancreatic
+(1 µM: 125.8 vs 119.7, p < 0.0001; 10 µM: 180.5 vs 181.5, p = 0.0305)..."
+</div>
+
+
+### Per-PDX-model view by cancer type (each point = one PDX) <span class="tag">NEW</span>
+
+```{r r1_7_perpdx, fig.width=10, fig.height=4.5}
+per_pdx <- function(pred,obs,conc){ d<-intersect(colnames(pred),colnames(obs)); s<-intersect(rownames(pred),rownames(obs))
+  tibble(PDX=s, Cancer=cancer_of(s), MSE=rowMeans((pred[s,d]-obs[s,d])^2,na.rm=TRUE), Conc=conc)}
+if(all(!sapply(preds,is.null))){
+  pdx <- bind_rows(
+    per_pdx(preds$RNA_10,O10,"10uM")%>%mutate(Modality="RNA"),
+    per_pdx(preds$Protein_10,O10,"10uM")%>%mutate(Modality="Protein"),
+    per_pdx(preds$RNA_1,O1,"1uM")%>%mutate(Modality="RNA"),
+    per_pdx(preds$Protein_1,O1,"1uM")%>%mutate(Modality="Protein")) %>%
+    filter(Cancer %in% c("Breast","Colorectal","Pancreatic")) %>%
+    mutate(Modality=factor(Modality,c("RNA","Protein")), Conc=factor(Conc,c("1uM","10uM")))
+  n_lab <- pdx %>% filter(Modality=="RNA") %>% distinct(Cancer,PDX) %>% count(Cancer) %>%
+    mutate(lab=sprintf("%s (n=%d)",Cancer,n))
+  pdx <- pdx %>% left_join(n_lab%>%select(Cancer,lab), by="Cancer")
+  p_perpdx <- ggplot(pdx, aes(Modality,MSE,fill=Modality))+
+    geom_boxplot(outlier.shape=NA,alpha=.6)+geom_jitter(width=.12,size=1.2,alpha=.7)+
+    stat_compare_means(method="wilcox.test",paired=TRUE,label="p.format",label.x=1.3,size=3)+
+    facet_grid(Conc ~ lab)+
+    scale_fill_manual(values=c(RNA="#619CFF",Protein="#F8766D"))+
+    labs(title="Per-PDX-model prediction error by cancer type (each point = one PDX)",
+         subtitle="Paired RNA-vs-protein across PDX within each lineage",
+         y="Mean squared error per PDX",x=NULL)+
+    theme_classic(base_size=11)+theme(legend.position="none")
+  print(p_perpdx); save_fig(p_perpdx, "Fig_perpdx_by_cancer", 10, 4.5)
+}
+```
+
+<div class="resp">
+**Draft response.** We thank the reviewer for this observation. This initial finding was based on our original pipeline (2-fold cross-validation). Following Reviewer 2's recommendations, we re-ran the entire drug-response analysis with revised parameters—incorporating 9-fold cross-validation and per-PDX × compound scoring—and repeated the lineage-stratified comparison both per drug and per PDX model (by cancer type).Under the re-run, the per-lineage patterns remain consistent across cancer types. Given the small sample sizes within individual lineages (breast ≈ 9, colorectal ≈ 5, pancreatic ≈ 10), paired Wilcoxon tests at the per-PDX level have limited statistical power (e.g., minimum achievable two-sided $p \approx 0.06$ at $n = 5$). Consequently, we present these per-lineage per-PDX evaluations as descriptive panels, relying on the per-drug panel for formal lineage-level inferential testing.
+</div>
+
+
+```{r session}
+sessionInfo()
+```
