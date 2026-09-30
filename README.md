@@ -1,6 +1,6 @@
 # PDX Multi-Omics Drug Response Prediction Model
 
-This repository contains the multi-omics drug-response prediction pipeline for Patient-Derived Xenograft (PDX) models[cite: 1, 2]. The workflow evaluates and compares the predictive performance of transcriptomic (RNA-seq) versus proteomic (Mass Spectrometry) data across 1 µM and 10 µM drug concentrations using a ComBat-harmonized ridge-regression framework[cite: 1, 2, 3].
+This repository contains the multi-omics drug-response prediction pipeline for Patient-Derived Xenograft (PDX) models. The workflow evaluates and compares the predictive performance of transcriptomic (RNA-seq) versus proteomic data across 1 µM and 10 µM drug concentrations using a ComBat-harmonized ridge-regression framework.
 
 ## Repository Structure
 
